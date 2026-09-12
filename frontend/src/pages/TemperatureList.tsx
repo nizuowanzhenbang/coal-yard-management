@@ -222,7 +222,7 @@ export default function TemperatureList() {
                 options={yards.map((y) => ({ value: y.id, label: `${y.code} ${y.name}` }))}
                 onChange={(v) => { const next = { ...filters, yard_id: v }; setFilters(next); setPage(1); load(1, pageSize, next) }}
               />
-              <InputNumber placeholder="最低温度℃" style={{ width: 130 }}
+              <InputNumber<number> placeholder="最低温度℃" style={{ width: 130 }}
                 onChange={(v) => { const next = { ...filters, min_temp: v ?? undefined }; setFilters(next); setPage(1); load(1, pageSize, next) }}
               />
               <Button icon={<ReloadOutlined />} onClick={() => { setFilters({}); setPage(1); load(1, pageSize, {}) }}>
