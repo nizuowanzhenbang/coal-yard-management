@@ -8,7 +8,6 @@ from typing import Annotated
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
-from app.models.stock_in import StockIn
 from app.models.stock_out import StockOutStatus
 
 
@@ -69,7 +68,7 @@ def timestamp(value, offset):
     return aware.isoformat()
 
 
-def export_accounting(db, row, declaration, instance, username):
+def export_accounting(incoming_by_no, row, declaration, instance, username):
     try:
         valid_text(instance)
         if len(instance) > 128 or instance != instance.strip():
@@ -91,7 +90,7 @@ def export_accounting(db, row, declaration, instance, username):
             if reference in seen:
                 raise ValueError('重复入场引用')
             seen.add(reference)
-            incoming = db.query(StockIn).filter_by(stockin_no=reference).first()
+            incoming = incoming_by_no.get(reference)
             if incoming is None or incoming.yard_id != row.yard_id or incoming.coal_type != row.coal_type:
                 raise ValueError('入场来源不一致')
             stored = datetime.fromisoformat(valid_text(item['stocked_at']))
@@ -106,6 +105,7 @@ def export_accounting(db, row, declaration, instance, username):
         if total != amount:
             raise ValueError('FIFO扣减总量与出场量不一致')
         content = {'contract_version': 'yard-accounting/v1', 'evidence_kind': 'inventory_fifo_accounting',
+                   'verification_scope': 'current_database_state_only', 'historical_source_identity_verified': False,
                    'source_system': 'coal-yard-management', 'source_instance': instance,
                    'stockout_id': str(row.id), 'stockout_no': valid_text(row.stockout_no),
                    'yard_id': str(row.yard_id), 'coal_type': valid_text(row.coal_type),
@@ -117,5 +117,5 @@ def export_accounting(db, row, declaration, instance, username):
                                        'stored_time': row.delivered_at.isoformat()}}
         encoded = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
         return {**content, 'content_sha256': hashlib.sha256(encoded.encode('utf-8')).hexdigest()}
-    except (ValueError, TypeError, KeyError, OverflowError, InvalidOperation) as exc:
+    except (ValueError, TypeError, KeyError, OverflowError, InvalidOperation, RecursionError) as exc:
         raise HTTPException(409, '账面出场依据不完整或不一致，需核查原记录') from exc

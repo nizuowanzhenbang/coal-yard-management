@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -204,11 +204,15 @@ from app.services.stockout_evidence import TimeDeclaration, clean_input, export_
 
 @router.post("/{stockout_id}/accounting-evidence")
 def accounting_evidence(
-    stockout_id: int,
+    stockout_id: Annotated[int, Path(ge=1, le=9223372036854775807)],
     payload: Annotated[TimeDeclaration, BeforeValidator(clean_input)],
     db: Session = Depends(get_db), current: User = Depends(get_current_user),
 ):
-    row = db.get(StockOut, stockout_id)
-    if row is None:
+    # 一条数据库语句读取出场及所在堆区入场记录，避免逐条查询拼接不同时间的状态。
+    records = (db.query(StockOut, StockIn).outerjoin(StockIn, StockIn.yard_id == StockOut.yard_id)
+               .filter(StockOut.id == stockout_id).all())
+    if not records:
         raise HTTPException(404, "出场记录不存在")
-    return api_response(data=export_accounting(db, row, payload, settings.YARD_SOURCE_INSTANCE, current.username))
+    row = records[0][0]
+    incoming_by_no = {incoming.stockin_no: incoming for _, incoming in records if incoming is not None}
+    return api_response(data=export_accounting(incoming_by_no, row, payload, settings.YARD_SOURCE_INSTANCE, current.username))

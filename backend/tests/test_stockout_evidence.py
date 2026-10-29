@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+from uuid import uuid4
 from sqlalchemy.orm import sessionmaker
 
 from app.main import app
@@ -20,7 +21,18 @@ from app.models.stock_out import StockOut, StockOutStatus
 def api(tmp_path, monkeypatch):
     import os
     url = os.environ.get('YARD_TEST_DATABASE_URL', f'sqlite:///{tmp_path}/isolated.db')
-    engine = create_engine(url, connect_args={'check_same_thread': False} if url.startswith('sqlite') else {})
+    schema = None
+    admin_engine = None
+    if url.startswith('sqlite'):
+        assert 'YARD_TEST_DATABASE_URL' not in os.environ, 'SQLite tests require their own temporary database'
+        engine = create_engine(url, connect_args={'check_same_thread': False})
+    else:
+        assert url.startswith('postgresql+psycopg2://'), 'unsupported test database'
+        schema = 'yard_test_' + uuid4().hex
+        admin_engine = create_engine(url)
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        engine = create_engine(url, connect_args={'options': f'-csearch_path={schema}'})
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     with factory() as db:
@@ -48,7 +60,13 @@ def api(tmp_path, monkeypatch):
                           path=f'/api/stock-out/{out_id}/accounting-evidence',
                           body={'offset_minutes': 480, 'time_evidence': '模拟UTC+08记录'}, breakdown=breakdown)
     app.dependency_overrides.clear()
-    Base.metadata.drop_all(engine); engine.dispose()
+    if schema is None:
+        Base.metadata.drop_all(engine)
+    engine.dispose()
+    if admin_engine is not None:
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin_engine.dispose()
 
 def test_readonly_export_and_stable_digest(api):
     assert api.client.post(api.path, json=api.body).status_code == 401
@@ -56,6 +74,8 @@ def test_readonly_export_and_stable_digest(api):
     assert result.status_code == 200, result.text
     data = result.json()['data']
     assert data['evidence_kind'] == 'inventory_fifo_accounting'
+    assert data['verification_scope'] == 'current_database_state_only'
+    assert data['historical_source_identity_verified'] is False
     assert data['source_instance'] == 'synthetic-yard'
     assert data['quantity_tonnes'] == '3.000'
     assert data['delivered_at'] == '2026-10-28T08:00:00+08:00'
@@ -102,3 +122,15 @@ def test_invalid_time_declaration(api, body):
 def test_missing_source_instance(api, monkeypatch):
     monkeypatch.setitem(settings.__dict__, 'YARD_SOURCE_INSTANCE', '')
     assert api.client.post(api.path, json=api.body, headers=api.headers).status_code == 503
+
+
+def test_out_of_range_id_rejected(api):
+    response = api.client.post('/api/stock-out/999999999999999999999999999/accounting-evidence', json=api.body, headers=api.headers)
+    assert response.status_code == 422
+
+
+def test_deeply_corrupt_fifo_is_rejected(api):
+    with api.factory() as db:
+        db.get(StockOut, api.out_id).fifo_breakdown = '[' * 12000 + ']' * 12000
+        db.commit()
+    assert api.client.post(api.path, json=api.body, headers=api.headers).status_code == 409
