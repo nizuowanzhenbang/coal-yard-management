@@ -2,13 +2,14 @@
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
+from app.schemas.quantity import InventoryQuantity
 
 from app.models.stocktake import StocktakeStatus
 
 
 class StocktakeCreate(BaseModel):
     yard_id: int
-    actual_inventory: float
+    actual_inventory: InventoryQuantity
     measured_at: datetime
     method: Optional[str] = None
     reason: Optional[str] = None

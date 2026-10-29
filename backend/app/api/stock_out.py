@@ -1,5 +1,6 @@
 """出场登记 API（FIFO 扣减 + 大额审批）"""
 import json
+from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import Optional
 
@@ -30,27 +31,39 @@ def _enrich(s: StockOut) -> dict:
 
 def _execute_fifo(db: Session, yard_id: int, quantity: float) -> list:
     """实际从 FIFO 队列扣减并返回明细。调用方需 commit。"""
-    need = quantity
-    batches = (
-        db.query(StockIn)
-        .filter(StockIn.yard_id == yard_id, StockIn.remaining_quantity > 0)
-        .order_by(StockIn.stocked_at.asc())
-        .all()
-    )
+    need = Decimal(str(quantity))
+    batches = (db.query(StockIn)
+               .filter(StockIn.yard_id == yard_id, StockIn.remaining_quantity > 0)
+               .order_by(StockIn.stocked_at.asc(), StockIn.id.asc()).all())
     breakdown = []
-    for b in batches:
-        if need <= 0.001:
+    for batch in batches:
+        if need == 0:
             break
-        take = min(b.remaining_quantity, need)
-        b.remaining_quantity = round(b.remaining_quantity - take, 3)
+        available = _stored_quantity(batch.remaining_quantity)
+        take = min(available, need)
+        remaining = available - take
+        batch.remaining_quantity = float(remaining)
         need -= take
-        breakdown.append({
-            "stockin_no": b.stockin_no,
-            "stocked_at": b.stocked_at.isoformat(),
-            "taken": round(take, 3),
-            "remaining_after": b.remaining_quantity,
-        })
+        breakdown.append({"stockin_no": batch.stockin_no, "stocked_at": batch.stocked_at.isoformat(),
+                          "taken": float(take), "remaining_after": float(remaining)})
+    if need != 0:
+        raise HTTPException(409, "库存明细不足，出场未执行")
     return breakdown
+
+
+def _stored_quantity(value):
+    try:
+        number = Decimal(str(value))
+        if not number.is_finite() or number < 0 or number % Decimal('0.001') != 0:
+            raise ValueError('库存数量不符合千分吨精度')
+        return number
+    except (ValueError, InvalidOperation) as exc:
+        raise HTTPException(409, "库存明细无效，需先核查") from exc
+
+
+def _available_inventory(db, yard_id):
+    rows = db.query(StockIn.remaining_quantity).filter(StockIn.yard_id == yard_id).all()
+    return sum((_stored_quantity(row[0]) for row in rows), Decimal(0))
 
 
 @router.get("")
@@ -122,11 +135,9 @@ def create_stockout(
         raise HTTPException(400, f"堆区煤种为 {yard.designated_coal_type}，与请求煤种 {payload.coal_type} 不符")
 
     # 库存校验（即使大额需审批，提交时也要预校验防止纯空仓申请）
-    current_inv = db.query(func.coalesce(func.sum(StockIn.remaining_quantity), 0)).filter(
-        StockIn.yard_id == yard.id
-    ).scalar() or 0
-    if payload.quantity > current_inv + 0.001:
-        raise HTTPException(400, f"出场量超出当前库存（剩 {current_inv:.1f} 吨）")
+    current_inv = _available_inventory(db, yard.id)
+    if Decimal(str(payload.quantity)) > current_inv:
+        raise HTTPException(400, f"出场量超出当前库存（剩 {current_inv:.3f} 吨）")
 
     next_seq = (db.query(func.count(StockOut.id)).scalar() or 0) + 1
     requires_approval = payload.quantity >= settings.LARGE_STOCKOUT_THRESHOLD
@@ -179,11 +190,9 @@ def approve_stockout(
 
     if payload.approved:
         # 复核库存（审批时点）
-        current_inv = db.query(func.coalesce(func.sum(StockIn.remaining_quantity), 0)).filter(
-            StockIn.yard_id == s.yard_id
-        ).scalar() or 0
-        if s.quantity > current_inv + 0.001:
-            raise HTTPException(400, f"审批时库存不足（剩 {current_inv:.1f} 吨），无法执行扣减")
+        current_inv = _available_inventory(db, s.yard_id)
+        if _stored_quantity(s.quantity) <= 0 or _stored_quantity(s.quantity) > current_inv:
+            raise HTTPException(400, f"审批时库存不足或数量无效（剩 {current_inv:.3f} 吨）")
         breakdown = _execute_fifo(db, s.yard_id, s.quantity)
         s.fifo_breakdown = json.dumps(breakdown, ensure_ascii=False)
         s.status = StockOutStatus.APPROVED

@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
+from app.schemas.quantity import MovementQuantity
 
 
 class StockInCreate(BaseModel):
@@ -10,7 +11,7 @@ class StockInCreate(BaseModel):
     supplier_name: Optional[str] = None
     contract_no: Optional[str] = None
     coal_type: str
-    quantity: float
+    quantity: MovementQuantity
     stocked_at: datetime
     transport_mode: Optional[str] = None
     calorific_value: Optional[float] = None

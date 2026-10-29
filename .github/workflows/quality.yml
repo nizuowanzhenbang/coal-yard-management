@@ -68,4 +68,4 @@ jobs:
       - run: python -m pip install -r backend/requirements.txt pytest psycopg2-binary
       - name: Isolated accounting evidence regressions
         working-directory: backend
-        run: python -m pytest tests/test_stockout_evidence.py -q
+        run: python -m pytest tests/test_stockout_evidence.py tests/test_yard_quantity.py -q
