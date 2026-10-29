@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
+from app.schemas.quantity import MovementQuantity
 
 from app.models.stock_out import StockOutStatus
 
@@ -9,7 +10,7 @@ from app.models.stock_out import StockOutStatus
 class StockOutCreate(BaseModel):
     yard_id: int
     coal_type: str
-    quantity: float
+    quantity: MovementQuantity
     destination: str
     purpose: Optional[str] = None
     delivered_at: datetime

@@ -32,3 +32,27 @@ def test_zero_stocktake_is_valid_input(operator):
     response = operator.client.post('/api/stocktake', json={'yard_id':999, 'actual_inventory':0,
                                     'measured_at':'2026-10-28T08:00:00'}, headers=operator.headers)
     assert response.status_code == 404, response.text
+
+
+def test_smallest_valid_outflow_is_fully_deducted(operator):
+    from app.models.stock_in import StockIn
+    import json
+    with operator.factory() as db:
+        incoming = db.get(StockIn, operator.in_id)
+        yard_id = incoming.yard_id
+    body = {'yard_id': yard_id, 'coal_type':'coal', 'quantity':0.001,
+            'destination':'模拟', 'delivered_at':'2026-10-28T08:00:00'}
+    result = operator.client.post('/api/stock-out', json=body, headers=operator.headers)
+    assert result.status_code == 200, result.text
+    assert json.loads(result.json()['data']['fifo_breakdown'])[0]['taken'] == 0.001
+    with operator.factory() as db:
+        assert db.get(StockIn, operator.in_id).remaining_quantity == 6.999
+
+
+def test_cannot_take_tolerance_over_available_inventory(operator):
+    from app.models.stock_in import StockIn
+    with operator.factory() as db:
+        yard_id = db.get(StockIn, operator.in_id).yard_id
+    body = {'yard_id': yard_id, 'coal_type':'coal', 'quantity':7.001,
+            'destination':'模拟', 'delivered_at':'2026-10-28T08:00:00'}
+    assert operator.client.post('/api/stock-out', json=body, headers=operator.headers).status_code == 400
