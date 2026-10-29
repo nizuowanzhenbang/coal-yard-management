@@ -195,3 +195,20 @@ def approve_stockout(
     db.commit()
     db.refresh(s)
     return api_response(message=msg, data=_enrich(s))
+
+
+from typing import Annotated
+from pydantic import BeforeValidator
+from app.services.stockout_evidence import TimeDeclaration, clean_input, export_accounting
+
+
+@router.post("/{stockout_id}/accounting-evidence")
+def accounting_evidence(
+    stockout_id: int,
+    payload: Annotated[TimeDeclaration, BeforeValidator(clean_input)],
+    db: Session = Depends(get_db), current: User = Depends(get_current_user),
+):
+    row = db.get(StockOut, stockout_id)
+    if row is None:
+        raise HTTPException(404, "出场记录不存在")
+    return api_response(data=export_accounting(db, row, payload, settings.YARD_SOURCE_INSTANCE, current.username))

@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     TEMP_ALERT: float = 65.0   # 告警
     TEMP_DANGER: float = 80.0  # 危险（接近自燃点）
 
+    # 部署实例身份，不从显示名称推断
+    YARD_SOURCE_INSTANCE: str = ""
+
     # 大额出场审批阈值（吨）
     LARGE_STOCKOUT_THRESHOLD: float = 5000.0
 
